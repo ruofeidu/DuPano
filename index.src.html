@@ -1,4 +1,23 @@
-<!DOCTYPE html><html lang=en> <head><title>360 Image (Panorama) Drag-and-drop Viewer</title><meta charset=utf-8><meta name=viewport content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0"><link type=text/css rel=stylesheet href=css/main.css></head> <body> <div id=container></div> <div id=info> drag equirectangular (360) image into the page to view; press space to toggle animation; db click for fullscreen. </div> <script src=js/mousetrap.min.js></script> <script type=module>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>360 Image (Panorama) Drag-and-drop Viewer</title>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0"
+    />
+    <link type="text/css" rel="stylesheet" href="css/main.css" />
+  </head>
+  <body>
+    <div id="container"></div>
+    <div id="info">
+      drag equirectangular (360) image into the page to view; press space to
+      toggle animation; db click for fullscreen.
+    </div>
+
+    <script src="js/mousetrap.min.js"></script>
+    <script type="module">
       import * as THREE from "./js/three.module.min.js";
 
       let camera, scene, renderer;
@@ -208,4 +227,6 @@
       document
         .getElementById("container")
         .addEventListener("dblclick", toggleFullscreen);
-    </script> </body> </html> 
+    </script>
+  </body>
+</html>
