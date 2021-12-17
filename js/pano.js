@@ -192,7 +192,7 @@ function update() {
   renderer.render(scene, camera);
 }
 
-// Create fullscreen video button
+// Fullscreen feature.
 function toggleFullscreen() {
   let v = document.getElementById("container");
   if (!document.webkitFullscreenElement) {
