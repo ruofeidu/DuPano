@@ -1,1 +1,8 @@
-<!DOCTYPE html><html lang=en> <head><title>360 Image (Panorama) Drag-and-drop Viewer</title><meta charset=utf-8><meta name=viewport content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0"><link type=text/css rel=stylesheet href=css/main.css></head> <body> <div id=container></div> <div id=info> drag equirectangular (360) image into the page to view; press space to toggle animation; db click for fullscreen. </div> <script src=js/mousetrap.min.js></script> <script type=module src=js/pano.js></script> </body> </html> 
+<!DOCTYPE html><html lang=en> <head><title>360 Image (Panorama) Drag-and-drop Viewer</title><meta charset=utf-8><meta name=viewport content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0"><link type=text/css rel=stylesheet href=css/main.css></head> <body> <div id=container></div> <div id=info> drag equirectangular (360) image into the page to view; press space to toggle animation; db click for fullscreen. </div> <script type=importmap>
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.166.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.166.1/examples/jsm/"
+      }
+    }
+	</script> <script src=js/mousetrap.min.js></script> <script type=module src=js/pano.js></script> </body> </html> 

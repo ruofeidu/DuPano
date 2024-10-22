@@ -1,27 +1,20 @@
-import * as THREE from "./three.module.min.js";
+import * as THREE from './three.module.min.js';
+import {XRButton} from './XRButton.js';  // Make sure to import XRButton
 
 let camera, scene, renderer;
-let autoRotating = true;
-let imageWidth = 1920,
-  imageHeight = 1080,
-  imageToUpdate = null,
-  imageNeedsUpdate = false;
+let autoRotating = false;
+let imageWidth = 1920, imageHeight = 1080, imageToUpdate = null,
+    imageNeedsUpdate = false;
 let material, texture;
 
-var imgDropBuffer = document.createElement("img");
-imgDropBuffer.classList.add("obj");
+var imgDropBuffer = document.createElement('img');
+imgDropBuffer.classList.add('obj');
 
-let isUserInteracting = false,
-  onPointerDownMouseX = 0,
-  onPointerDownMouseY = 0,
-  lon = 0,
-  onPointerDownLon = 0,
-  lat = 0,
-  onPointerDownLat = 0,
-  phi = 0,
-  theta = 0;
+let isUserInteracting = false, onPointerDownMouseX = 0, onPointerDownMouseY = 0,
+    lon = 0, onPointerDownLon = 0, lat = 0, onPointerDownLat = 0, phi = 0,
+    theta = 0;
 
-Mousetrap.bind("space", function () {
+Mousetrap.bind('space', function() {
   autoRotating = !autoRotating;
 });
 
@@ -29,14 +22,10 @@ init();
 animate();
 
 function init() {
-  const container = document.getElementById("container");
+  const container = document.getElementById('container');
 
   camera = new THREE.PerspectiveCamera(
-    75,
-    window.innerWidth / window.innerHeight,
-    1,
-    1100
-  );
+      75, window.innerWidth / window.innerHeight, 1, 1100);
 
   scene = new THREE.Scene();
 
@@ -46,59 +35,56 @@ function init() {
 
   const queryString = window.location.search;
   const urlParams = new URLSearchParams(queryString);
-  const src = urlParams.get("src");
+  const src = urlParams.get('src');
 
-  texture = new THREE.TextureLoader().load(src || "presets/panorama.png");
-  material = new THREE.MeshBasicMaterial({ map: texture });
+  texture = new THREE.TextureLoader().load(src || 'presets/panorama.png');
+  material = new THREE.MeshBasicMaterial({map: texture});
 
   const mesh = new THREE.Mesh(geometry, material);
-
   scene.add(mesh);
 
-  renderer = new THREE.WebGLRenderer();
+  renderer = new THREE.WebGLRenderer({antialias: true});
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;  // Enable WebXR support
   container.appendChild(renderer.domElement);
 
-  container.style.touchAction = "none";
-  container.addEventListener("pointerdown", onPointerDown);
+  // Add WebXR button
+  document.body.appendChild(XRButton.createButton(renderer));
 
-  document.addEventListener("wheel", onDocumentMouseWheel);
+  container.style.touchAction = 'none';
+  container.addEventListener('pointerdown', onPointerDown);
 
-  //
+  document.addEventListener('wheel', onDocumentMouseWheel);
 
-  document.addEventListener("dragover", function (event) {
+  // Drag-and-drop functionality
+  document.addEventListener('dragover', function(event) {
     event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
+    event.dataTransfer.dropEffect = 'copy';
   });
 
-  document.addEventListener("dragenter", function () {
+  document.addEventListener('dragenter', function() {
     document.body.style.opacity = 0.5;
   });
 
-  document.addEventListener("dragleave", function () {
+  document.addEventListener('dragleave', function() {
     document.body.style.opacity = 1;
   });
 
-  document.addEventListener("drop", function (event) {
+  document.addEventListener('drop', function(event) {
     event.preventDefault();
 
     const reader = new FileReader();
-    // reader.addEventListener("load", function (event) {
-    //   material.map.image.src = event.target.result;
-    //   material.map.needsUpdate = true;
-    // });
     reader.readAsDataURL(event.dataTransfer.files[0]);
 
-    reader.onload = (function (aImg) {
-      return function (e) {
+    reader.onload = (function(aImg) {
+      return function(e) {
         aImg.src = e.target.result;
-        setTimeout(function () {
+        setTimeout(function() {
           imageWidth = aImg.width;
           imageHeight = aImg.height;
           imageToUpdate = e.target.result;
           imageNeedsUpdate = true;
-          console.log(aImg.width); // right now file already loaded...
         }, 100);
       };
     })(imgDropBuffer);
@@ -106,9 +92,7 @@ function init() {
     document.body.style.opacity = 1;
   });
 
-  //
-
-  window.addEventListener("resize", onWindowResize);
+  window.addEventListener('resize', onWindowResize);
 }
 
 function onWindowResize() {
@@ -129,8 +113,8 @@ function onPointerDown(event) {
   onPointerDownLon = lon;
   onPointerDownLat = lat;
 
-  document.addEventListener("pointermove", onPointerMove);
-  document.addEventListener("pointerup", onPointerUp);
+  document.addEventListener('pointermove', onPointerMove);
+  document.addEventListener('pointerup', onPointerUp);
 }
 
 function onPointerMove(event) {
@@ -145,33 +129,29 @@ function onPointerUp() {
 
   isUserInteracting = false;
 
-  document.removeEventListener("pointermove", onPointerMove);
-  document.removeEventListener("pointerup", onPointerUp);
+  document.removeEventListener('pointermove', onPointerMove);
+  document.removeEventListener('pointerup', onPointerUp);
 }
 
 function onDocumentMouseWheel(event) {
   const fov = camera.fov + event.deltaY * 0.05;
-
   camera.fov = THREE.MathUtils.clamp(fov, 10, 75);
-
   camera.updateProjectionMatrix();
 }
 
 function animate() {
-  requestAnimationFrame(animate);
-  update();
+  renderer.setAnimationLoop(() => {  // Updated to support WebXR rendering loop
+    update();
+  });
 }
 
 function update() {
   if (imageNeedsUpdate) {
-    if (
-      imageWidth !== material.map.width ||
-      imageHeight !== material.map.height
-    ) {
+    if (imageWidth !== material.map.width ||
+        imageHeight !== material.map.height) {
       material.map = new THREE.TextureLoader().load(imageToUpdate);
     }
     imageNeedsUpdate = false;
-    // material.map.image.src = imageToUpdate;
     material.map.needsUpdate = true;
   }
 
@@ -194,7 +174,7 @@ function update() {
 
 // Fullscreen feature.
 function toggleFullscreen() {
-  let v = document.getElementById("container");
+  let v = document.getElementById('container');
   if (!document.webkitFullscreenElement) {
     if (v.requestFullScreen) {
       v.requestFullScreen();
@@ -208,6 +188,5 @@ function toggleFullscreen() {
   }
 }
 
-document
-  .getElementById("container")
-  .addEventListener("dblclick", toggleFullscreen);
+document.getElementById('container')
+    .addEventListener('dblclick', toggleFullscreen);
