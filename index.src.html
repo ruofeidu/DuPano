@@ -1,37 +1,314 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-
-<head>
-  <title>360 Image (Panorama) Drag-and-drop Viewer</title>
-  <meta charset="utf-8" />
-  <meta name="viewport"
-        content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
-  <link type="text/css"
-        rel="stylesheet"
-        href="css/main.css" />
-</head>
-
-<body>
-  <div id="container"></div>
-  <div id="info">
-    drag equirectangular (360) image into the page to view; press space to
-    toggle animation; db click for fullscreen.
-  </div>
-
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.166.1/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.166.1/examples/jsm/"
+  <head>
+    <title>360 Photo Viewer | XR Blocks</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+    <link
+      type="text/css"
+      rel="stylesheet"
+      href="https://xrblocks.github.io/css/xr.css"
+    />
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background-color: #000;
+        font-family: sans-serif;
       }
-    }
-	</script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/mousetrap/1.6.5/mousetrap.min.js"
-          integrity="sha512-+Jg3Ynmj9hse704K48H6rBBI3jdNBjReRGBCxUWFfOz3yVurnJFWtAWssDAsGtzWYw89xFWPxShuj2T6E9EOpg=="
-          crossorigin="anonymous"
-          referrerpolicy="no-referrer"></script>
-  <script type="module"
-          src="js/pano.js"></script>
-</body>
+      #drop-zone-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.6);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 2rem;
+        font-weight: bold;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s ease-in-out;
+        z-index: 1000;
+      }
+    </style>
+    <script>
+      window.litDisableBundleWarning = true;
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
+          "troika-three-text": "https://cdn.jsdelivr.net/gh/protectwise/troika@028b81cf308f0f22e5aa8e78196be56ec1997af5/packages/troika-three-text/src/index.js",
+          "troika-three-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-three-utils/src/index.js",
+          "troika-worker-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-worker-utils/src/index.js",
+          "bidi-js": "https://esm.sh/bidi-js@%5E1.0.2?target=es2022",
+          "webgl-sdf-generator": "https://esm.sh/webgl-sdf-generator@1.1.1/es2022/webgl-sdf-generator.mjs",
+          "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
+          "lit/": "https://esm.run/lit@3/",
+          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.10.0/build/xrblocks.js",
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.10.0/build/addons/"
+        }
+      }
+    </script>
+  </head>
 
+  <body>
+    <div id="drop-zone-overlay">Drop 360 Image Here</div>
+    <hint-overlay></hint-overlay>
+
+    <script type="module">
+      import * as THREE from "three";
+      import * as xb from "xrblocks";
+      import { LitElement, html, css } from "lit";
+
+      // Define a custom Lit element for the UI hint
+      class HintOverlay extends LitElement {
+        static styles = css`
+          :host {
+            position: absolute;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.6);
+            color: rgba(255, 255, 255, 0.9);
+            padding: 12px 24px;
+            border-radius: 24px;
+            font-family: sans-serif;
+            font-size: 14px;
+            pointer-events: none; /* Let clicks pass through to the canvas */
+            z-index: 500;
+            text-align: center;
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            white-space: nowrap;
+          }
+
+          @media (max-width: 600px) {
+            :host {
+              white-space: normal;
+              width: 80%;
+            }
+          }
+        `;
+
+        render() {
+          return html`drag equirectangular (360) image into the page to view;
+          press space to toggle animation; db click for fullscreen.`;
+        }
+      }
+      customElements.define("hint-overlay", HintOverlay);
+
+      /**
+       * A 360 panoramic photo viewer in XR Blocks.
+       * Supports desktop drag-to-look, mouse wheel FOV zooming, and local image drag-and-drop.
+       */
+      class PanoramaViewer extends xb.Script {
+        init() {
+          // Setup the 360 sphere (radius 100 to stay safely within the default camera far plane)
+          const geometry = new THREE.SphereGeometry(100, 60, 40);
+          // Invert the geometry on the x-axis so that all faces point inward
+          geometry.scale(-1, 1, 1);
+
+          // Get URL params or use a placeholder landscape 360 texture
+          const urlParams = new URLSearchParams(window.location.search);
+          const defaultSrc = "presets/panorama.png";
+          const src = urlParams.get("src") || defaultSrc;
+
+          const textureLoader = new THREE.TextureLoader();
+          this.texture = textureLoader.load(src);
+          this.texture.colorSpace = THREE.SRGBColorSpace;
+
+          this.material = new THREE.MeshBasicMaterial({ map: this.texture });
+          this.mesh = new THREE.Mesh(geometry, this.material);
+
+          // Initial position at typical user head height
+          this.mesh.position.set(0, xb.core.user.height, 0);
+          this.add(this.mesh);
+
+          this.autoRotating = false;
+          this.lon = 0;
+          this.lat = 0;
+
+          // State for XR pinch-to-drag
+          this.xrDragging = false;
+          this.xrDragController = null;
+          this.lastXrDragPos = new THREE.Vector3();
+
+          this.setupInteractions();
+          this.setupDragAndDrop();
+        }
+
+        onSelectStart(event) {
+          this.xrDragging = true;
+          this.xrDragController = event.target;
+          this.xrDragController.getWorldPosition(this.lastXrDragPos);
+        }
+
+        onSelecting(event) {
+          if (!this.xrDragging || event.target !== this.xrDragController)
+            return;
+
+          const currentPos = new THREE.Vector3();
+          this.xrDragController.getWorldPosition(currentPos);
+
+          const deltaX = currentPos.x - this.lastXrDragPos.x;
+          const deltaY = currentPos.y - this.lastXrDragPos.y;
+
+          // Adjust lon and lat based on the distance the controller moved
+          this.lon += deltaX * 200;
+          this.lat += deltaY * 200;
+
+          this.lastXrDragPos.copy(currentPos);
+        }
+
+        onSelectEnd(event) {
+          if (event.target === this.xrDragController) {
+            this.xrDragging = false;
+            this.xrDragController = null;
+          }
+        }
+
+        setupInteractions() {
+          this.isDragging = false;
+          this.onPointerDownMouseX = 0;
+          this.onPointerDownMouseY = 0;
+          this.onPointerDownLon = 0;
+          this.onPointerDownLat = 0;
+
+          document.addEventListener("pointerdown", (e) => {
+            if (e.isPrimary === false) return;
+            this.isDragging = true;
+            this.onPointerDownMouseX = e.clientX;
+            this.onPointerDownMouseY = e.clientY;
+            this.onPointerDownLon = this.lon;
+            this.onPointerDownLat = this.lat;
+          });
+
+          document.addEventListener("pointermove", (e) => {
+            if (e.isPrimary === false || !this.isDragging) return;
+            this.lon =
+              (this.onPointerDownMouseX - e.clientX) * 0.1 +
+              this.onPointerDownLon;
+            this.lat =
+              (e.clientY - this.onPointerDownMouseY) * 0.1 +
+              this.onPointerDownLat;
+          });
+
+          document.addEventListener("pointerup", () => {
+            this.isDragging = false;
+          });
+
+          // Zoom functionality
+          document.addEventListener("wheel", (e) => {
+            const camera = xb.core.camera;
+            const fov = camera.fov + e.deltaY * 0.05;
+            camera.fov = THREE.MathUtils.clamp(fov, 10, 100);
+            camera.updateProjectionMatrix();
+          });
+
+          // Toggle auto-rotation
+          document.addEventListener("keydown", (e) => {
+            if (e.code === "Space") {
+              this.autoRotating = !this.autoRotating;
+            }
+          });
+
+          // Fullscreen toggle on double-click
+          document.addEventListener("dblclick", () => {
+            if (!document.fullscreenElement) {
+              document.body.requestFullscreen().catch((err) => {
+                console.warn(
+                  `Error attempting to enable full-screen mode: ${err.message}`,
+                );
+              });
+            } else {
+              document.exitFullscreen();
+            }
+          });
+        }
+
+        setupDragAndDrop() {
+          const overlay = document.getElementById("drop-zone-overlay");
+
+          document.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            overlay.style.opacity = "1";
+          });
+
+          document.addEventListener("dragenter", (e) => {
+            e.preventDefault();
+            overlay.style.opacity = "1";
+          });
+
+          document.addEventListener("dragleave", (e) => {
+            // Prevent flickering when dragging over child elements
+            if (!e.relatedTarget || e.relatedTarget.nodeName === "HTML") {
+              overlay.style.opacity = "0";
+            }
+          });
+
+          document.addEventListener("drop", (e) => {
+            e.preventDefault();
+            overlay.style.opacity = "0";
+
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+              const file = e.dataTransfer.files[0];
+              if (!file.type.startsWith("image/")) return;
+
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                const imgUrl = event.target.result;
+                const textureLoader = new THREE.TextureLoader();
+
+                textureLoader.load(imgUrl, (newTexture) => {
+                  newTexture.colorSpace = THREE.SRGBColorSpace;
+                  if (this.material.map) this.material.map.dispose();
+                  this.material.map = newTexture;
+                  this.material.needsUpdate = true;
+                });
+              };
+              reader.readAsDataURL(file);
+            }
+          });
+        }
+
+        update() {
+          // Only auto-rotate if the user isn't interacting via mouse or XR pinch
+          if (!this.isDragging && !this.xrDragging && this.autoRotating) {
+            this.lon += 0.1;
+          }
+
+          // Clamp looking straight up or down
+          this.lat = Math.max(-85, Math.min(85, this.lat));
+
+          // By applying the rotation to the sphere mesh itself, we keep the XR camera pure.
+          // This allows VR users to physically look around while desktop users can drag to look.
+          this.mesh.rotation.y = THREE.MathUtils.degToRad(this.lon);
+          this.mesh.rotation.x = THREE.MathUtils.degToRad(this.lat);
+
+          // Constantly snap the panorama sphere to the user's camera world position
+          // This ensures the user stays inside the center of the photo even if they move in VR.
+          xb.core.camera.getWorldPosition(this.mesh.position);
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        const options = new xb.Options();
+        options.setAppTitle("360 Photo Viewer");
+
+        // Note: Simulator addon is explicitly omitted from imports,
+        // preventing the default 2D simulator UI from loading as requested.
+        xb.add(new PanoramaViewer());
+        xb.init(options);
+      });
+    </script>
+  </body>
 </html>
