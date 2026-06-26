@@ -5,9 +5,28 @@ Deployed in <https://tool.duruofei.com/360viewer/>
 
 ## Interaction
 
+* drag to look around, scroll to zoom.
 * space key to toggle animation.
-* double click to toggle fullscreen.
+* double click (or `F`) to toggle fullscreen.
+* press `i` to see all keyboard shortcuts.
 * add `?src=<url>` to the url to load an image (requires PHP, or server code for cross-origin access)
+
+### Desktop viewing modes (XR Blocks simulator)
+
+Insta360-style projections, switchable from the on-screen toolbar or the
+keyboard. Switching animates with a smooth cross-fade. **XR / AR mode keeps the
+original inside-the-sphere experience unchanged.**
+
+| Mode | Key | Description |
+| --- | --- | --- |
+| Dewarp | `D` / `1` | Normal rectilinear view (default) |
+| MEGA | `M` / `2` | Wide-angle |
+| ULTRA | `U` / `3` | Ultra-wide fisheye |
+| Crystal Ball | `C` / `4` | Scene wrapped on a floating ball |
+| Tiny Planet | `T` / `5` | Little-planet stereographic |
+| Equirect | `E` / `6` | Flat equirectangular 360 strip |
+
+Use `[` / `]` to cycle between modes.
 
 ## v1
 
@@ -26,3 +45,4 @@ Supports video as well, v1 and three.js have some code to reuse. Please feel fre
 ## License
 
 CC0, do whatever you want.
+# DuReviewBot
