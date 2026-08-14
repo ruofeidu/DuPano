@@ -8,6 +8,7 @@ Deployed in <https://tool.duruofei.com/360viewer/>
 * drag to look around, scroll to zoom.
 * space key to toggle animation.
 * double click (or `F`) to toggle fullscreen.
+* press `S` (or the camera button) to save a snapshot of the current view as a PNG.
 * press `i` to see all keyboard shortcuts.
 * add `?src=<url>` to the url to load an image (requires PHP, or server code for cross-origin access)
 

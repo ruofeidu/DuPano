@@ -36,6 +36,28 @@
         transition: opacity 0.2s ease-in-out;
         z-index: 1000;
       }
+      #shutter-flash {
+        position: absolute;
+        inset: 0;
+        background: #fff;
+        opacity: 0;
+        pointer-events: none;
+        z-index: 1200;
+      }
+      #shutter-flash.fire {
+        animation: shutter 0.35s ease-out;
+      }
+      @keyframes shutter {
+        0% {
+          opacity: 0;
+        }
+        12% {
+          opacity: 0.85;
+        }
+        100% {
+          opacity: 0;
+        }
+      }
     </style>
     <script>
       window.litDisableBundleWarning = true;
@@ -61,6 +83,7 @@
 
   <body>
     <div id="drop-zone-overlay">Drop 360 Image Here</div>
+    <div id="shutter-flash"></div>
     <hint-overlay></hint-overlay>
     <mode-toolbar></mode-toolbar>
     <shortcuts-overlay></shortcuts-overlay>
@@ -197,6 +220,10 @@
             opacity: 0.65;
             letter-spacing: 0.5px;
           }
+          .icon {
+            font-size: 16px;
+            line-height: 1;
+          }
           .sep {
             width: 1px;
             background: rgba(255, 255, 255, 0.15);
@@ -237,6 +264,11 @@
             new CustomEvent("pano-command", { detail: { type: "help" } })
           );
         }
+        _snap() {
+          window.dispatchEvent(
+            new CustomEvent("pano-command", { detail: { type: "snapshot" } })
+          );
+        }
         render() {
           return html`
             ${MODES.map(
@@ -252,6 +284,10 @@
               `
             )}
             <div class="sep"></div>
+            <button class="help" title="Save a snapshot (S)" @click=${this._snap}>
+              <span class="icon">&#128247;</span>
+              <span class="key">S</span>
+            </button>
             <button class="help" title="Show keyboard shortcuts (i)" @click=${this._help}>
               <span class="name">Keys</span>
               <span class="key">i</span>
@@ -375,6 +411,10 @@
               <div class="row">
                 <span class="label">Toggle auto-rotation</span>
                 <span><kbd>Space</kbd></span>
+              </div>
+              <div class="row">
+                <span class="label">Save a snapshot (PNG)</span>
+                <span><kbd>S</kbd></span>
               </div>
               <div class="row">
                 <span class="label">Toggle fullscreen</span>
@@ -559,6 +599,15 @@
           this.quad.renderOrder = -1;
           this.add(this.quad);
 
+          // Offscreen scene reusing the same quad geometry + material so a
+          // snapshot re-renders the current projection at full resolution
+          // (the on-screen drawing buffer isn't preserved for readback).
+          this.snapScene = new THREE.Scene();
+          const snapQuad = new THREE.Mesh(this.quad.geometry, quadMat);
+          snapQuad.frustumCulled = false;
+          this.snapScene.add(snapQuad);
+          this.snapCamera = new THREE.Camera();
+
           // --- Look / zoom / animation state -----------------------------
           this.autoRotating = false;
           this.lon = 0;
@@ -629,11 +678,17 @@
         setupCommands() {
           window.addEventListener("pano-command", (e) => {
             if (e.detail.type === "mode") this.setMode(e.detail.index);
+            else if (e.detail.type === "snapshot") this.takeSnapshot();
           });
 
           window.addEventListener("keydown", (e) => {
             if (e.metaKey || e.ctrlKey || e.altKey) return;
             const k = e.key.toLowerCase();
+
+            if (k === "s") {
+              this.takeSnapshot();
+              return;
+            }
 
             // Letter mnemonics (D, M, U, C, T, E).
             const byLetter = MODES.findIndex((m) => m.key.toLowerCase() === k);
@@ -689,6 +744,81 @@
           } else {
             document.exitFullscreen();
           }
+        }
+
+        // Re-render the current projection into an offscreen target at full
+        // device resolution, then save it as a PNG.
+        takeSnapshot() {
+          const renderer = xb.core && xb.core.renderer;
+          if (!renderer) return;
+
+          const dpr = renderer.getPixelRatio ? renderer.getPixelRatio() : 1;
+          const w = Math.min(Math.round(window.innerWidth * dpr), 4096);
+          const h = Math.min(Math.round(window.innerHeight * dpr), 4096);
+
+          // Match the snapshot aspect to the requested resolution, finish any
+          // in-flight transition so the capture is a single clean mode.
+          const prevAspect = this.uniforms.uAspect.value;
+          const prevMix = this.uniforms.uMix.value;
+          const prevModeA = this.uniforms.uModeA.value;
+          this.uniforms.uAspect.value = w / h;
+          this.uniforms.uModeA.value = this.uniforms.uModeB.value;
+          this.uniforms.uMix.value = 0;
+
+          const rt = new THREE.WebGLRenderTarget(w, h);
+          const prevTarget = renderer.getRenderTarget();
+          renderer.setRenderTarget(rt);
+          renderer.clear();
+          renderer.render(this.snapScene, this.snapCamera);
+          const buf = new Uint8Array(w * h * 4);
+          renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+          renderer.setRenderTarget(prevTarget);
+          rt.dispose();
+
+          // Restore live uniforms.
+          this.uniforms.uAspect.value = prevAspect;
+          this.uniforms.uMix.value = prevMix;
+          this.uniforms.uModeA.value = prevModeA;
+
+          // GL reads bottom-up; flip rows into a 2D canvas.
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          const img = ctx.createImageData(w, h);
+          const rowBytes = w * 4;
+          for (let y = 0; y < h; y++) {
+            const src = (h - 1 - y) * rowBytes;
+            img.data.set(buf.subarray(src, src + rowBytes), y * rowBytes);
+          }
+          ctx.putImageData(img, 0, 0);
+
+          const stamp = new Date()
+            .toISOString()
+            .slice(0, 19)
+            .replace(/[:T]/g, "-");
+          const modeName = MODES[this.targetMode].name.replace(/\s+/g, "");
+          canvas.toBlob((blob) => {
+            if (!blob) return;
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = `pano-${modeName}-${stamp}.png`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+          }, "image/png");
+
+          this.flashSnapshot();
+        }
+
+        flashSnapshot() {
+          const flash = document.getElementById("shutter-flash");
+          if (!flash) return;
+          flash.classList.remove("fire");
+          // Force reflow so the animation can restart on rapid captures.
+          void flash.offsetWidth;
+          flash.classList.add("fire");
         }
 
         setupInteractions() {
