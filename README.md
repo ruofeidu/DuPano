@@ -23,7 +23,7 @@ original inside-the-sphere experience unchanged.**
 | Dewarp | `D` / `1` | Normal rectilinear view (default) |
 | MEGA | `M` / `2` | Wide-angle |
 | ULTRA | `U` / `3` | Ultra-wide fisheye |
-| Crystal Ball | `C` / `4` | Scene wrapped on a floating ball |
+| Crystal Ball | `C` / `4` | Ray-traced glass ball refracting the scene |
 | Tiny Planet | `T` / `5` | Little-planet stereographic |
 | Equirect | `E` / `6` | Flat equirectangular 360 strip |
 
