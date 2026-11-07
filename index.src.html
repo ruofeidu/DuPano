@@ -451,6 +451,7 @@
         precision highp float;
         varying vec2 vUv;
         uniform sampler2D uTex;
+        uniform sampler2D uBlurTex; // dual-Kawase blurred copy of uTex
         uniform float uAspect;
         uniform float uLon;   // look longitude (radians)
         uniform float uLat;   // look latitude (radians)
@@ -465,11 +466,15 @@
         // Camera basis, filled in main().
         vec3 gFwd, gRight, gUp;
 
-        vec3 sampleDir(vec3 d) {
+        vec3 sampleTex(sampler2D t, vec3 d) {
           d = normalize(d);
           float u = 0.5 + atan(d.x, -d.z) / TWO_PI;
           float v = 0.5 + asin(clamp(d.y, -1.0, 1.0)) / PI;
-          return texture2D(uTex, vec2(u, v)).rgb;
+          return texture2D(t, vec2(u, v)).rgb;
+        }
+
+        vec3 sampleDir(vec3 d) {
+          return sampleTex(uTex, d);
         }
 
         // Rectilinear (pinhole) projection for Dewarp / MEGA.
@@ -502,24 +507,11 @@
         }
 
         // Crystal ball: a ray-traced glass sphere floating in the scene.
-        // Light refracts through the ball (turning the world upside down
-        // inside it, as a real crystal ball does), with Fresnel reflections,
-        // slight dispersion, specular glints and a defocused background.
+        // Light refracts through the ball with Fresnel reflections, slight
+        // dispersion, specular glints and a defocused background.
         const float BALL_DIST = 1.0;
         const float BALL_R = 0.45;
         const float BALL_IOR = 1.5;
-
-        // 12-tap golden-angle disc blur for a smooth bokeh background.
-        vec3 sampleBlur(vec3 d, float s) {
-          vec3 acc = vec3(0.0);
-          for (int i = 0; i < 12; i++) {
-            float fi = float(i);
-            float r = s * sqrt((fi + 0.5) / 12.0);
-            float a = fi * 2.39996323;
-            acc += sampleDir(d + r * (cos(a) * gRight + sin(a) * gUp));
-          }
-          return acc / 12.0;
-        }
 
         // Refract into the sphere at p1, out the far side, sample the world.
         vec3 refractThrough(vec3 rd, vec3 p1, vec3 n1, vec3 C, float ior) {
@@ -528,6 +520,9 @@
           vec3 n2 = normalize(p2 - C);
           vec3 r2 = refract(r1, -n2, ior);
           if (dot(r2, r2) < 1e-4) r2 = reflect(r1, -n2);
+          // A real ball lens inverts the image; rotate 180 degrees about the
+          // view axis so the scene inside the ball reads upright.
+          r2 = 2.0 * dot(r2, gFwd) * gFwd - r2;
           return sampleDir(r2);
         }
 
@@ -543,7 +538,7 @@
           float cover = smoothstep(BALL_R + aa, BALL_R - aa, dist);
 
           // Background: defocused, dimmed, with a soft halo around the ball.
-          vec3 bg = sampleBlur(rd, 0.035) * 0.55;
+          vec3 bg = sampleTex(uBlurTex, rd) * 0.55;
           bg *= 1.0 - 0.45 * smoothstep(BALL_R * 1.35, BALL_R, dist);
           if (cover <= 0.0) return vec4(bg, 1.0);
 
@@ -582,6 +577,33 @@
           return vec4(texture2D(uTex, vec2(u, v)).rgb, 1.0);
         }
 
+        // Triangular-PDF dither of +-1 LSB in sRGB output space. Breaks up
+        // 8-bit banding in smooth dark gradients (e.g. the blurred crystal
+        // ball backdrop) without visible grain; dithering in linear space
+        // would be amplified by the sRGB curve in the darks.
+        float hash12(vec2 p) {
+          vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+          p3 += dot(p3, p3.yzx + 33.33);
+          return fract((p3.x + p3.y) * p3.z);
+        }
+
+        vec3 linearToSRGB(vec3 c) {
+          return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055,
+                     step(0.0031308, c));
+        }
+
+        vec3 sRGBToLinear(vec3 c) {
+          return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)),
+                     step(0.04045, c));
+        }
+
+        vec3 dither(vec3 lin) {
+          vec2 p = gl_FragCoord.xy;
+          float n = hash12(p) + hash12(p + 71.37) - 1.0;
+          vec3 s = linearToSRGB(clamp(lin, 0.0, 1.0)) + n / 255.0;
+          return sRGBToLinear(clamp(s, 0.0, 1.0));
+        }
+
         vec4 shadeMode(int m, vec2 sp) {
           if (m == 0) return modeRect(sp, 75.0);
           if (m == 1) return modeRect(sp, 115.0);
@@ -603,9 +625,53 @@
           vec4 a = shadeMode(uModeA, sp);
           vec4 b = shadeMode(uModeB, sp);
           vec4 c = mix(a, b, uMix);
-          gl_FragColor = vec4(c.rgb * c.a, 1.0);
+          gl_FragColor = vec4(dither(c.rgb * c.a), 1.0);
         }
       `;
+
+      // Dual-Kawase blur (Bjorge, SIGGRAPH 2015) run once per panorama on an
+      // equirect pyramid. Horizontal taps widen toward the poles so the blur
+      // is roughly uniform in viewing angle rather than in texels.
+      const KAWASE_DOWN = /* glsl */ `
+        precision highp float;
+        varying vec2 vUv;
+        uniform sampler2D uSrc;
+        uniform vec2 uTexel;
+        void main() {
+          float lat = (vUv.y - 0.5) * 3.14159265;
+          vec2 o = uTexel * vec2(1.0 / max(cos(lat), 0.2), 1.0);
+          vec4 s = texture2D(uSrc, vUv) * 4.0;
+          s += texture2D(uSrc, vUv - o);
+          s += texture2D(uSrc, vUv + o);
+          s += texture2D(uSrc, vUv + vec2(o.x, -o.y));
+          s += texture2D(uSrc, vUv - vec2(o.x, -o.y));
+          gl_FragColor = s / 8.0;
+        }
+      `;
+
+      const KAWASE_UP = /* glsl */ `
+        precision highp float;
+        varying vec2 vUv;
+        uniform sampler2D uSrc;
+        uniform vec2 uTexel;
+        void main() {
+          float lat = (vUv.y - 0.5) * 3.14159265;
+          vec2 h = 0.5 * uTexel * vec2(1.0 / max(cos(lat), 0.2), 1.0);
+          vec4 s = texture2D(uSrc, vUv + vec2(-2.0 * h.x, 0.0));
+          s += texture2D(uSrc, vUv + vec2(-h.x, h.y)) * 2.0;
+          s += texture2D(uSrc, vUv + vec2(0.0, 2.0 * h.y));
+          s += texture2D(uSrc, vUv + vec2(h.x, h.y)) * 2.0;
+          s += texture2D(uSrc, vUv + vec2(2.0 * h.x, 0.0));
+          s += texture2D(uSrc, vUv + vec2(h.x, -h.y)) * 2.0;
+          s += texture2D(uSrc, vUv + vec2(0.0, -2.0 * h.y));
+          s += texture2D(uSrc, vUv + vec2(-h.x, -h.y)) * 2.0;
+          gl_FragColor = s / 12.0;
+        }
+      `;
+
+      // Smallest pyramid width; lower = blurrier crystal-ball background.
+      const BLUR_MIN_WIDTH = 64;
+      const BLUR_UP_STEPS = 3;
 
       const TRANSITION_SECONDS = 0.7;
 
@@ -625,7 +691,7 @@
           const urlParams = new URLSearchParams(window.location.search);
           const src = urlParams.get("src") || "presets/panorama.png";
           const textureLoader = new THREE.TextureLoader();
-          this.texture = textureLoader.load(src);
+          this.texture = textureLoader.load(src, (t) => (this.blurPending = t));
           this.configureTexture(this.texture);
 
           // --- XR sphere (original feature) ------------------------------
@@ -639,6 +705,7 @@
           // --- Desktop reprojection quad ---------------------------------
           this.uniforms = {
             uTex: { value: this.texture },
+            uBlurTex: { value: this.texture }, // sharp until the blur is built
             uAspect: { value: window.innerWidth / window.innerHeight },
             uLon: { value: 0 },
             uLat: { value: 0 },
@@ -667,6 +734,27 @@
           snapQuad.frustumCulled = false;
           this.snapScene.add(snapQuad);
           this.snapCamera = new THREE.Camera();
+
+          // Dual-Kawase passes share the quad geometry and clip-space VERT.
+          const kawase = (frag) =>
+            new THREE.ShaderMaterial({
+              vertexShader: VERT,
+              fragmentShader: frag,
+              uniforms: {
+                uSrc: { value: null },
+                uTexel: { value: new THREE.Vector2() },
+              },
+              depthTest: false,
+              depthWrite: false,
+            });
+          this.blurDown = kawase(KAWASE_DOWN);
+          this.blurUp = kawase(KAWASE_UP);
+          this.blurQuad = new THREE.Mesh(this.quad.geometry, this.blurDown);
+          this.blurQuad.frustumCulled = false;
+          this.blurScene = new THREE.Scene();
+          this.blurScene.add(this.blurQuad);
+          this.blurTarget = null;
+          this.blurPending = null;
 
           // --- Look / zoom / animation state -----------------------------
           this.autoRotating = false;
@@ -806,11 +894,99 @@
           }
         }
 
+        // Run offscreen render passes, restoring the render target after.
+        // XR is paused for the duration so three.js doesn't swap in the
+        // stereo XR cameras when a pass happens during an immersive session.
+        withOffscreen(fn) {
+          const renderer = xb.core.renderer;
+          const prevTarget = renderer.getRenderTarget();
+          const prevXr = renderer.xr.enabled;
+          renderer.xr.enabled = false;
+          try {
+            fn(renderer);
+          } finally {
+            renderer.setRenderTarget(prevTarget);
+            renderer.xr.enabled = prevXr;
+          }
+        }
+
+        // Build the blurred background once a new panorama has loaded.
+        flushBlur() {
+          if (!this.blurPending || !xb.core || !xb.core.renderer) return;
+          const tex = this.blurPending;
+          this.blurPending = null;
+          this.buildBlur(tex);
+        }
+
+        // Build the crystal ball's background: dual-Kawase downsample the
+        // panorama to BLUR_MIN_WIDTH, then upsample BLUR_UP_STEPS times.
+        buildBlur(tex) {
+          const img = tex.image;
+          if (!img || !img.width) return;
+
+          // Half-float keeps the repeated blur passes free of 8-bit rounding;
+          // fall back to 8-bit sRGB where float targets aren't renderable.
+          const ext = xb.core.renderer.extensions;
+          const floatOK =
+            ext.has("EXT_color_buffer_float") ||
+            ext.has("EXT_color_buffer_half_float");
+          const format = floatOK
+            ? { type: THREE.HalfFloatType }
+            : { colorSpace: THREE.SRGBColorSpace };
+
+          const targets = [];
+          const make = (w) => {
+            const rt = new THREE.WebGLRenderTarget(w, w / 2, {
+              ...format,
+              wrapS: THREE.RepeatWrapping,
+              depthBuffer: false,
+            });
+            targets.push(rt);
+            return rt;
+          };
+
+          this.withOffscreen((renderer) => {
+            let src = tex;
+            let sw = img.width;
+            let sh = img.height;
+            const pass = (mat, dst) => {
+              this.blurQuad.material = mat;
+              mat.uniforms.uSrc.value = src;
+              mat.uniforms.uTexel.value.set(1 / sw, 1 / sh);
+              renderer.setRenderTarget(dst);
+              renderer.render(this.blurScene, this.snapCamera);
+              src = dst.texture;
+              sw = dst.width;
+              sh = dst.height;
+            };
+
+            let w = Math.max(
+              BLUR_MIN_WIDTH,
+              Math.min(2048, THREE.MathUtils.floorPowerOfTwo(sw / 2))
+            );
+            for (;;) {
+              pass(this.blurDown, make(w));
+              if (w <= BLUR_MIN_WIDTH) break;
+              w /= 2;
+            }
+            for (let i = 0; i < BLUR_UP_STEPS; i++) pass(this.blurUp, make(sw * 2));
+          });
+
+          // Keep only the final level; free the old blur and intermediates.
+          const final = targets.pop();
+          targets.forEach((t) => t.dispose());
+          if (this.blurTarget) this.blurTarget.dispose();
+          this.blurTarget = final;
+          this.uniforms.uBlurTex.value = final.texture;
+        }
+
         // Re-render the current projection into an offscreen target at full
         // device resolution, then save it as a PNG.
         takeSnapshot() {
           const renderer = xb.core && xb.core.renderer;
           if (!renderer) return;
+          // A freshly loaded panorama may not have had a frame to blur yet.
+          this.flushBlur();
 
           const dpr = renderer.getPixelRatio ? renderer.getPixelRatio() : 1;
           const w = Math.min(Math.round(window.innerWidth * dpr), 4096);
@@ -830,13 +1006,13 @@
           const rt = new THREE.WebGLRenderTarget(w, h, {
             colorSpace: THREE.SRGBColorSpace,
           });
-          const prevTarget = renderer.getRenderTarget();
-          renderer.setRenderTarget(rt);
-          renderer.clear();
-          renderer.render(this.snapScene, this.snapCamera);
           const buf = new Uint8Array(w * h * 4);
-          renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
-          renderer.setRenderTarget(prevTarget);
+          this.withOffscreen(() => {
+            renderer.setRenderTarget(rt);
+            renderer.clear();
+            renderer.render(this.snapScene, this.snapCamera);
+            renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+          });
           rt.dispose();
 
           // Restore live uniforms.
@@ -989,6 +1165,7 @@
                   this.material.map = newTexture;
                   this.material.needsUpdate = true;
                   this.uniforms.uTex.value = newTexture;
+                  this.blurPending = newTexture;
                   if (old) old.dispose();
                 });
               };
@@ -999,6 +1176,8 @@
 
         update() {
           const dt = this.clock.getDelta();
+
+          this.flushBlur();
 
           // Detect XR (immersive) vs desktop and swap render path.
           const xrActive = !!(
